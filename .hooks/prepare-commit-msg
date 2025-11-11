@@ -20,15 +20,48 @@ enable_timelog="__ENABLE_TIMELOG__"
 
 
 # --------------------------
-# Fetch JIRA JSON once
+# Fetch all unresolved issues (Enhanced Search API, GET)
 # --------------------------
 fetch_jira_issues_json() {
-  local jql="assignee=currentUser() AND resolution=Unresolved ORDER BY updated DESC"
+  local jql='assignee=currentUser() AND resolution=Unresolved ORDER BY updated DESC'
+  local fields='key,summary,status,timetracking'
+  local base="$jira_url/rest/api/3/search/jql"
+  local max=100
 
-  curl -s -u "$jira_user:$jira_token" \
-    -G --data-urlencode "jql=$jql" \
-    --data-urlencode "fields=key,summary,status,timetracking" \
-    "$jira_url/rest/api/2/search"
+  local nextPageToken=""
+  local issues='[]'
+  local resp is_last
+
+  while : ; do
+    if [[ -n "$nextPageToken" ]]; then
+      resp="$(curl -s -u "$jira_user:$jira_token" -G \
+        --data-urlencode "jql=$jql" \
+        --data-urlencode "fields=$fields" \
+        --data-urlencode "maxResults=$max" \
+        --data-urlencode "nextPageToken=$nextPageToken" \
+        "$base")"
+    else
+      resp="$(curl -s -u "$jira_user:$jira_token" -G \
+        --data-urlencode "jql=$jql" \
+        --data-urlencode "fields=$fields" \
+        --data-urlencode "maxResults=$max" \
+        "$base")"
+    fi
+
+    # Accumulate issues across pages
+    issues="$(jq -c --argjson acc "$issues" '.issues as $new | ($acc + $new)' <<<"$resp")"
+
+    is_last="$(jq -r '.isLast // false' <<<"$resp")"
+    if [[ "$is_last" == "true" ]]; then
+      break
+    fi
+
+    nextPageToken="$(jq -r '.nextPageToken // empty' <<<"$resp")"
+    [[ -z "$nextPageToken" ]] && break
+  done
+
+  # Emit a compact object compatible with your parser
+  jq -n --argjson issues "$issues" '{issues:$issues}'
 }
 
 # --------------------------
@@ -233,6 +266,10 @@ msg_no_emoji=$(echo "$original_msg" | sed -E 's/^[[:space:]]*[^[:alnum:][:space:
 capitalized_msg=$(capitalize_first_letter "$msg_no_emoji")
 final_msg="$chosen_emoji $capitalized_msg"
 
+# Accepts: 1w 2d 3h 30m  |  2.5h  |  1.2d  |  0.5w  |  combos like "1d 2.5h" (minutes remain integer)
+# Units order remains w → d → h → m (each optional)
+TIME_INPUT_REGEX='^([0-9]+(?:\.[0-9]+)?w\s*)?([0-9]+(?:\.[0-9]+)?d\s*)?([0-9]+(?:\.[0-9]+)?h\s*)?([0-9]+m\s*)?$'
+
 if [[ "$provider" == "JIRA" && "$enable_timelog" == "true" ]]; then
   if [[ -n "$ticket_id" ]]; then
     final_msg="[$ticket_id] $final_msg"
@@ -267,12 +304,13 @@ if [[ "$provider" == "JIRA" && "$enable_timelog" == "true" ]]; then
       if [[ -n "$rem_time" ]]; then
         echo "🧮  Remaining time for $ticket_id:  $rem_time"
       fi
-      echo -n "⏱️  Time spent on this task (e.g., 5m, 30m, 1h, 2h 30m, 1w 2d): "
+      echo -n "⏱️  Time spent on this task (e.g., 5m, 30m, 1h, 2h 30m, 2.5h, 1.2d, 0.5w): "
 
       read time_spent < /dev/tty
+      time_spent="$(echo "$time_spent" | sed 's/^ *//;s/ *$//')"   # trim
 
-      # Validate time format using regex
-      if [[ -n "$time_spent" && "$time_spent" =~ ^([0-9]+w\s*)?([0-9]+d\s*)?([0-9]+h\s*)?([0-9]+m\s*)?$ ]]; then
+      # Allow decimals for w/d/h; minutes remain integer (Jira supports "2.5h" etc.)
+      if [[ -n "$time_spent" && "$time_spent" =~ $TIME_INPUT_REGEX ]]; then
         echo ""
         echo "⏳  Logging $time_spent to $ticket_id with commit message..."
 
@@ -306,12 +344,13 @@ if [[ "$provider" == "JIRA" && "$enable_timelog" == "true" ]]; then
         else
           echo "❌  Failed to log time to $ticket_id (HTTP $http_status)"
           echo ""
-          echo "👉  Don't forget to log manually : https://portonics.atlassian.net/browse/$ticket_id"
+          echo "👉  Don't forget to log manually : $jira_url/browse/$ticket_id"
         fi
       else
         echo "❌  Woops! Missing or invalid time format!"
         echo ""
-        echo "👉  Don't forget to log manually : https://portonics.atlassian.net/browse/$ticket_id"
+        echo "👉  Examples I accept now: 30m | 2h | 2h 30m | 2.5h | 1.2d | 0.5w | 1d 2.5h"
+        echo "👉  Don't forget to log manually : $jira_url/browse/$ticket_id"
       fi
     fi
   fi
