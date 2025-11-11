@@ -268,7 +268,7 @@ final_msg="$chosen_emoji $capitalized_msg"
 
 # Accepts: 1w 2d 3h 30m  |  2.5h  |  1.2d  |  0.5w  |  combos like "1d 2.5h" (minutes remain integer)
 # Units order remains w → d → h → m (each optional)
-TIME_INPUT_REGEX='^([0-9]+(?:\.[0-9]+)?w\s*)?([0-9]+(?:\.[0-9]+)?d\s*)?([0-9]+(?:\.[0-9]+)?h\s*)?([0-9]+m\s*)?$'
+TIME_INPUT_REGEX='^([0-9]+([.][0-9]+)?w[[:space:]]*)?([0-9]+([.][0-9]+)?d[[:space:]]*)?([0-9]+([.][0-9]+)?h[[:space:]]*)?([0-9]+m[[:space:]]*)?$'
 
 if [[ "$provider" == "JIRA" && "$enable_timelog" == "true" ]]; then
   if [[ -n "$ticket_id" ]]; then
@@ -307,10 +307,10 @@ if [[ "$provider" == "JIRA" && "$enable_timelog" == "true" ]]; then
       echo -n "⏱️  Time spent on this task (e.g., 5m, 30m, 1h, 2h 30m, 2.5h, 1.2d, 0.5w): "
 
       read time_spent < /dev/tty
-      time_spent="$(echo "$time_spent" | sed 's/^ *//;s/ *$//')"   # trim
+      time_spent="$(echo "$time_spent" | sed 's/^ *//;s/ *$//')" 
 
       # Allow decimals for w/d/h; minutes remain integer (Jira supports "2.5h" etc.)
-      if [[ -n "$time_spent" && "$time_spent" =~ $TIME_INPUT_REGEX ]]; then
+      if [[ -n "$time_spent" && $time_spent =~ $TIME_INPUT_REGEX ]]; then
         echo ""
         echo "⏳  Logging $time_spent to $ticket_id with commit message..."
 
